@@ -1,0 +1,76 @@
+# Starter pipeline
+# Start with a minimal pipeline that you can customize to build and deploy your code.
+
+trigger: none
+pr:
+- develop
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  buildConfiguration: 'Release'
+  prid: "$(System.PullRequest.PullRequestId)"
+
+steps:
+
+- task: AzureCLI@1
+  inputs:
+    azureSubscription: 'CICD'
+    scriptLocation: inlineScript
+    inlineScript: |
+      sed -i -e 's/loram-webportal.azurewebsites.net/'$(prid)'-loram.azurewebsites.net/g' src/authConfig.js
+      cat src/authConfig.js  
+      echo "pr =$(prid)  group=$(RESOURCE-GROUP)  plan=$(SERVCIE-PLAN)"
+      account_name=$1
+      key=$(az storage account keys list --account-name $account_name | jq '.[0].value')
+      az webapp create -g $(RESOURCE-GROUP) -p $(SERVCIE-PLAN) -n '$(prid)-loram' --runtime "NODE|14-lts"
+
+- task: Npm@1
+  displayName: 'npm install'
+  inputs:
+    verbose: false
+
+- task: Npm@1
+  displayName: 'npm build'
+  inputs:
+    command: custom
+    verbose: false
+    customCommand: 'run build'
+- task: AzureCLI@1
+  inputs:
+    azureSubscription: 'CICD'
+    scriptLocation: inlineScript
+    inlineScript: |
+      ls -l
+      mkdir prbuild
+      cp -r build prbuild
+
+- task: ArchiveFiles@2
+  displayName: 'Archive files'
+  inputs:
+    rootFolderOrFile: '$(System.DefaultWorkingDirectory)/prbuild'
+    includeRootFolder: false
+    
+- task: PublishBuildArtifacts@1
+  displayName: 'Publish Artifact'
+  inputs:
+    PathtoPublish: '$(build.artifactstagingdirectory)'
+      
+- task: DownloadBuildArtifacts@0
+  displayName: 'Download the build artifacts'
+  inputs:
+    buildType: 'current'
+    downloadType: 'single'
+    artifactName: 'drop'
+    downloadPath: '$(build.artifactstagingdirectory)'
+
+- task: AzureRmWebAppDeployment@4
+  displayName: 'Deploy Azure App Service'
+  inputs:
+    azureSubscription: 'CICD'
+    appType: webAppLinux
+    WebAppName: '$(prid)-loram'
+    packageForLinux: '$(build.artifactstagingdirectory)/drop/*.zip'
+    RuntimeStack: 'NODE|14-lts'
+    startUpCommand: 'pm2 serve /home/site/wwwroot/build --no-daemon --spa'  
